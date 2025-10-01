@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width" />
+<title>HLS 播放器</title>
+<style>
+  :root{
+    --bg:#0b0b0b; --panel:#121212; --muted:#9aa0a6; --text:#eaeaea; --accent:#7aa2ff; --line:#222;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
+  header{padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  main{padding:16px;display:grid;gap:14px;max-width:1100px;margin:auto}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .col{display:grid;gap:10px}
+  input,select,button{background:#1a1a1a;color:var(--text);border:1px solid #333;border-radius:10px;padding:10px}
+  button{cursor:pointer}
+  .badge{font-size:12px;color:var(--muted)}
+  video{width:100%;background:#000;border-radius:14px}
+  .drop{border:2px dashed #3a3a3a;border-radius:14px;padding:14px;text-align:center;color:var(--muted)}
+  .drop.drag{border-color:var(--accent);color:var(--accent)}
+  .grid{display:grid;grid-template-columns:1fr 300px;gap:16px}
+  @media (max-width:960px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px}
+  .title{display:flex;justify-content:space-between;align-items:center}
+  .list{display:grid;gap:8px;max-height:340px;overflow:auto}
+  .item{display:flex;gap:8px;align-items:center;justify-content:space-between;background:#141414;border:1px solid #242424;border-radius:10px;padding:8px}
+  .left{display:flex;flex-direction:column}
+  .name{font-weight:600}
+  .meta{font-size:12px;color:var(--muted)}
+  .fav{border:1px solid #444;border-radius:8px;padding:4px 8px;background:#1c1c1c}
+  .ok{color:#77dd77}.warn{color:#ffd166}.err{color:#ff6b6b}
+  .log{white-space:pre-wrap;background:#0f0f0f;border:1px solid #222;border-radius:10px;padding:10px;max-height:220px;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas}
+  a{color:var(--accent)}
+  .pill{font-size:12px;border:1px solid #2a2a2a;background:#151515;padding:4px 8px;border-radius:999px;color:var(--muted)}
+</style>
+</head>
+<body>
+  <header>
+    <span class="badge">支援：拖拉 M3U、搜尋、群組、收藏、鍵盤換台、錯誤日誌、部分錯誤自動恢復</span>
+  </header>
+
+  <main>
+    <div class="grid">
+      <div class="col">
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <div class="row">
+              <input id="urlInput" placeholder="或貼上可跨域的 .m3u8 連結（純前端，來源需開 CORS）" size="46" />
+              <button id="playUrlBtn">播放連結</button>
+            </div>
+            <div class="row">
+              <label class="pill"><input type="checkbox" id="autoplay" checked /> 自動播放</label>
+              <label class="pill"><input type="checkbox" id="autoRecover" checked /> 自動恢復錯誤</label>
+            </div>
+          </div>
+          <video id="video" controls playsinline></video>
+          <div class="row" style="justify-content:space-between">
+            <div class="badge">當前頻道：<span id="currentName">—</span>　URL：<span id="currentUrl" style="color:#9fd4ff">—</span></div>
+            <div class="row">
+              <button id="prevBtn">上一台（↑）</button>
+              <button id="nextBtn">下一台（↓）</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="title">
+            <div class="row">
+              <strong>載入你的 M3U 清單</strong>
+              <span class="badge">支援拖拉檔案到區塊</span>
+            </div>
+            <input type="file" id="fileInput" accept=".m3u,.m3u8" />
+          </div>
+          <div id="drop" class="drop">把 <code>.m3u / .m3u8</code> 檔案拖拉到此處，或用右上角的「選檔」</div>
+          <div class="row" style="gap:12px">
+            <input id="search" placeholder="搜尋：名稱 / tvg-id / 群組" size="30" />
+            <select id="groupFilter"><option value="">全部群組</option></select>
+            <span class="badge">共 <span id="count">0</span> 台　|　群組 <span id="gcount">0</span> 個</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="title">
+            <strong>頻道列表</strong>
+            <div class="row">
+              <button id="showAll">全部</button>
+              <button id="showFav">只看收藏</button>
+              <button id="clearFav">清空收藏</button>
+            </div>
+          </div>
+          <div id="list" class="list"></div>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="card">
+          <div class="title"><strong>來源統計</strong><span class="badge">域名分佈</span></div>
+          <div id="stats" class="list"></div>
+        </div>
+        <div class="card">
+          <div class="title"><strong>錯誤日誌</strong><span class="badge">僅純前端可見</span></div>
+          <div id="log" class="log"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- hls.js -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+  <script>
+  // ====== 狀態 ======
+  let channels = [];          // 全部頻道
+  let filtered = [];          // 篩選後清單
+  let favorites = new Set(JSON.parse(localStorage.getItem("hls_fav")||"[]"));
+  let currentIndex = -1;
+  let hls = null;
+
+  const $ = (s)=>document.querySelector(s);
+  const log = (m, lvl="") => {
+    const el = $("#log");
+    const t = `[${new Date().toLocaleTimeString()}] ${m}`;
+    const line = document.createElement("div");
+    line.textContent = t;
+    if (lvl) line.classList.add(lvl);
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  };
+
+  const els = {
+    file: $("#fileInput"),
+    drop: $("#drop"),
+    list: $("#list"),
+    count: $("#count"),
+    gcount: $("#gcount"),
+    groupFilter: $("#groupFilter"),
+    search: $("#search"),
+    playUrlBtn: $("#playUrlBtn"),
+    urlInput: $("#urlInput"),
+    currentName: $("#currentName"),
+    currentUrl: $("#currentUrl"),
+    nextBtn: $("#nextBtn"),
+    prevBtn: $("#prevBtn"),
+    showAll: $("#showAll"),
+    showFav: $("#showFav"),
+    clearFav: $("#clearFav"),
+    stats: $("#stats"),
+    autoplay: $("#autoplay"),
+    autoRecover: $("#autoRecover"),
+    video: $("#video")
+  };
+
+  // ====== 解析 M3U ======
+  function parseM3U(text){
+    const lines = text.split(/\r?\n/);
+    const out = [];
+    let cur = {name:null, attrs:{}};
+    for (let raw of lines){
+      const line = raw.trim();
+      if (!line) continue;
+      if (line.startsWith("#EXTINF:")){
+        // 取 attributes + name
+        // #EXTINF:-1 tvg-id="NHK" group-title="日本台",NHK
+        const comma = line.lastIndexOf(",");
+        const attrPart = comma>=0 ? line.slice(line.indexOf(":")+1, comma) : line.slice(line.indexOf(":")+1);
+        const name = comma>=0 ? line.slice(comma+1).trim() : "未命名";
+        const attrs = {};
+        // 抓 key="value" 或 key=value
+        attrPart.replace(/([A-Za-z0-9_-]+)=("([^"]+)"|([^,\s]+))/g, (_,k,__,v1,v2)=>{
+          attrs[k]= (v1||v2||"").trim();
+          return "";
+        });
+        cur = {name:name||"未命名", attrs};
+      } else if (!line.startsWith("#")){
+        const url = line;
+        const u = safeUrl(url);
+        const domain = u ? u.host : (url.split("/")[2]||"");
+        out.push({
+          name: cur.name || "未命名",
+          url, domain,
+          group: cur.attrs["group-title"] || cur.attrs["group"] || "",
+          tvg_id: cur.attrs["tvg-id"] || cur.attrs["tvg_name"] || ""
+        });
+        cur = {name:null, attrs:{}};
+      }
+    }
+    return out;
+  }
+
+  function safeUrl(u){
+    try { return new URL(u); } catch(_){ return null; }
+  }
+
+  // ====== UI 建構 ======
+  function rebuildStats(){
+    const byDomain = {};
+    for (const c of channels){
+      byDomain[c.domain] = (byDomain[c.domain]||0)+1;
+    }
+    const entries = Object.entries(byDomain).sort((a,b)=>b[1]-a[1]);
+    els.stats.innerHTML = "";
+    for (const [d, n] of entries){
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `<div class="left"><div class="name">${d || "(未知)"}</div><div class="meta">共 ${n} 台</div></div>`;
+      els.stats.appendChild(div);
+    }
+  }
+
+  function rebuildGroups(){
+    const set = new Set(channels.map(c=>c.group).filter(Boolean));
+    const groups = Array.from(set).sort((a,b)=>a.localeCompare(b));
+    els.groupFilter.innerHTML = `<option value="">全部群組</option>` + groups.map(g=>`<option>${g}</option>`).join("");
+    els.gcount.textContent = groups.length;
+  }
+
+  function applyFilter(){
+    const kw = els.search.value.trim().toLowerCase();
+    const grp = els.groupFilter.value.trim();
+    filtered = channels.filter(c=>{
+      if (grp && c.group!==grp) return false;
+      if (!kw) return true;
+      const hay = (c.name+" "+c.tvg_id+" "+c.group).toLowerCase();
+      return hay.includes(kw);
+    });
+    renderList(filtered);
+  }
+
+  function renderList(list){
+    els.list.innerHTML = "";
+    els.count.textContent = list.length;
+    list.forEach((c, i)=>{
+      const idx = channels.indexOf(c);
+      const div = document.createElement("div");
+      div.className = "item";
+      const isFav = favorites.has(c.url);
+      div.innerHTML = `
+        <div class="left">
+          <div class="name">${idx+1}. ${escapeHtml(c.name)}</div>
+          <div class="meta">${escapeHtml(c.group||"-")}　|　${escapeHtml(c.tvg_id||"-")}　|　${escapeHtml(c.domain||"-")}</div>
+        </div>
+        <div class="row">
+          <button data-idx="${idx}" class="play">播放</button>
+          <button data-url="${encodeURIComponent(c.url)}" class="fav">${isFav?"★ 已收藏":"☆ 收藏"}</button>
+        </div>
+      `;
+      els.list.appendChild(div);
+    });
+
+    els.list.querySelectorAll("button.play").forEach(btn=>{
+      btn.onclick = ()=> {
+        const idx = Number(btn.dataset.idx);
+        playIndex(idx);
+      };
+    });
+    els.list.querySelectorAll("button.fav").forEach(btn=>{
+      btn.onclick = ()=>{
+        const url = decodeURIComponent(btn.dataset.url);
+        if (favorites.has(url)) favorites.delete(url); else favorites.add(url);
+        localStorage.setItem("hls_fav", JSON.stringify(Array.from(favorites)));
+        applyFilter();
+      };
+    });
+  }
+
+  function escapeHtml(s){ return s.replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m])) }
+
+  // ====== 播放控制 ======
+  function playIndex(idx){
+    if (idx<0 || idx>=channels.length) return;
+    currentIndex = idx;
+    const c = channels[idx];
+    els.currentName.textContent = c.name || "—";
+    els.currentUrl.textContent = c.url || "—";
+    playUrl(c.url);
+  }
+
+  function playUrl(url){
+    if (!url) return;
+    destroyHls();
+    const autoRecover = els.autoRecover.checked;
+    const autoPlay = els.autoplay.checked;
+
+    if (Hls.isSupported()){
+      hls = new Hls({ lowLatencyMode: false, enableWorker: true, backBufferLength: 60 });
+      hls.on(Hls.Events.ERROR, (evt,data)=>{
+        log(`[HLS ERROR] ${data.type} / ${data.details} / ${data?.response?.code||""}`, data.fatal ? "err" : "warn");
+        if (autoRecover){
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                log("致命網路錯誤，嘗試重載來源…","warn");
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                log("致命媒體錯誤，嘗試恢復媒體…","warn");
+                hls.recoverMediaError();
+                break;
+              default:
+                log("致命錯誤，嘗試重新附掛…","warn");
+                destroyHls();
+                setTimeout(()=>playUrl(url), 500);
+            }
+          }
+        }
+      });
+      hls.loadSource(url);
+      hls.attachMedia(els.video);
+      if (autoPlay) els.video.play().catch(()=>{});
+    } else if (els.video.canPlayType("application/vnd.apple.mpegurl")) {
+      els.video.src = url;
+      if (autoPlay) els.video.play().catch(()=>{});
+    } else {
+      alert("此瀏覽器不支援 HLS");
+    }
+  }
+
+  function destroyHls(){
+    try{ if (hls){ hls.destroy(); hls = null; } }catch(_){}
+  }
+
+  // ====== 檔案/拖拉處理 ======
+  els.file.addEventListener("change", async (e)=>{
+    if (!e.target.files[0]) return;
+    await loadFromFile(e.target.files[0]);
+  });
+
+  ["dragenter","dragover"].forEach(ev=>{
+    els.drop.addEventListener(ev, (e)=>{ e.preventDefault(); e.stopPropagation(); els.drop.classList.add("drag"); });
+  });
+  ["dragleave","drop"].forEach(ev=>{
+    els.drop.addEventListener(ev, (e)=>{ e.preventDefault(); e.stopPropagation(); els.drop.classList.remove("drag"); });
+  });
+  els.drop.addEventListener("drop", async (e)=>{
+    const f = e.dataTransfer.files?.[0];
+    if (f) await loadFromFile(f);
+  });
+
+  async function loadFromFile(file){
+    const text = await file.text();
+    channels = parseM3U(text);
+    if (channels.length===0){ alert("清單中找不到頻道 URL"); return; }
+    rebuildGroups();
+    rebuildStats();
+    applyFilter();
+    log(`載入清單：${channels.length} 台`);
+    // 預設播第一台
+    playIndex(0);
+  }
+
+  // ====== 搜尋 / 篩選 / 收藏視圖 ======
+  els.search.addEventListener("input", debounce(applyFilter, 150));
+  els.groupFilter.addEventListener("change", applyFilter);
+
+  els.showAll.onclick = ()=> applyFilter();
+  els.showFav.onclick = ()=>{
+    const kw = els.search.value.trim().toLowerCase();
+    const grp = els.groupFilter.value.trim();
+    filtered = channels.filter(c=>{
+      if (grp && c.group!==grp) return false;
+      if (!favorites.has(c.url)) return false;
+      if (!kw) return true;
+      const hay = (c.name+" "+c.tvg_id+" "+c.group).toLowerCase();
+      return hay.includes(kw);
+    });
+    renderList(filtered);
+  };
+  els.clearFav.onclick = ()=>{
+    if (!confirm("確定清空收藏？")) return;
+    favorites.clear();
+    localStorage.setItem("hls_fav","[]");
+    applyFilter();
+  };
+
+  // ====== 上/下一台 + 從輸入 URL 播放 ======
+  els.nextBtn.onclick = ()=> {
+    if (channels.length===0) return;
+    const next = (currentIndex+1) % channels.length;
+    playIndex(next);
+  };
+  els.prevBtn.onclick = ()=> {
+    if (channels.length===0) return;
+    const prev = (currentIndex-1+channels.length) % channels.length;
+    playIndex(prev);
+  };
+  window.addEventListener("keydown", (e)=>{
+    if (e.key==="ArrowDown") { e.preventDefault(); els.nextBtn.click(); }
+    if (e.key==="ArrowUp")   { e.preventDefault(); els.prevBtn.click(); }
+  });
+
+  els.playUrlBtn.onclick = ()=>{
+    const u = els.urlInput.value.trim();
+    if (!u) return;
+    // 直接播放單一 m3u8（注意：來源需 CORS）
+    playUrl(u);
+    els.currentName.textContent = "(自訂 URL)";
+    els.currentUrl.textContent = u;
+  };
+
+  function debounce(fn, ms){
+    let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args),ms); };
+  }
+
+  // 初始提示
+  log("準備就緒：請拖拉 .m3u 檔或按右上角選擇檔案。","ok");
+  </script>
+  <!-- 注意：若來源未開放 CORS 或有防盜鏈（需 Referer/Origin），純前端無法播放。這時請改用你的反向代理版本。 -->
+</body>
+</html>
